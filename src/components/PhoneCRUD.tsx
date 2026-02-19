@@ -116,7 +116,6 @@ export default function PhoneCRUD() {
     <div className="phone-crud">
       <div className="header">
         <h1>Bóveda de Teléfonos</h1>
-        <p className="restriction">Protegido con RLS e Identidad Única</p>
       </div>
 
       <div className="input-section">
