@@ -1,49 +1,46 @@
-/*
-  # Create phone numbers table
+-- 1. Preparar la estructura para seguridad por usuario
+ALTER TABLE phone_numbers ADD COLUMN IF NOT EXISTS user_id uuid DEFAULT auth.uid();
 
-  1. New Tables
-    - `phone_numbers`
-      - `id` (uuid, primary key) - Unique identifier for each record
-      - `phone` (text, unique, not null) - Phone number (exactly 10 digits)
-      - `created_at` (timestamptz) - Timestamp when the record was created
-  
-  2. Security
-    - Enable RLS on `phone_numbers` table
-    - Add policy for anyone to read phone numbers (public access)
-    - Add policy for anyone to insert phone numbers (public access)
-    - Add policy for anyone to update phone numbers (public access)
-    - Add policy for anyone to delete phone numbers (public access)
-  
-  3. Constraints
-    - Phone number must be exactly 10 digits
-    - Phone number must be unique
-*/
+-- 2. Limpieza total de políticas inseguras anteriores
+DROP POLICY IF EXISTS "Anyone can read phone numbers" ON phone_numbers;
+DROP POLICY IF EXISTS "Anyone can insert phone numbers" ON phone_numbers;
+DROP POLICY IF EXISTS "Anyone can update phone numbers" ON phone_numbers;
+DROP POLICY IF EXISTS "Anyone can delete phone numbers" ON phone_numbers;
+DROP POLICY IF EXISTS "Anonimos solo pueden insertar" ON phone_numbers;
 
-CREATE TABLE IF NOT EXISTS phone_numbers (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  phone text UNIQUE NOT NULL CHECK (phone ~ '^[0-9]{10}$'),
-  created_at timestamptz DEFAULT now()
-);
+-- 3. Políticas de Seguridad a Nivel de Fila (RLS) definitivas
+-- Solo el dueño puede ver sus números (Evita el volcado/dumping que hizo el profe)
+CREATE POLICY "Users can only see their own numbers"
+  ON phone_numbers FOR SELECT
+  USING (auth.uid() = user_id);
 
-ALTER TABLE phone_numbers ENABLE ROW LEVEL SECURITY;
+-- Los usuarios pueden insertar sus propios números
+CREATE POLICY "Users can insert their own numbers"
+  ON phone_numbers FOR INSERT
+  WITH CHECK (auth.uid() = user_id OR user_id IS NULL);
 
-CREATE POLICY "Anyone can read phone numbers"
-  ON phone_numbers
-  FOR SELECT
-  USING (true);
+-- Solo el dueño puede editar sus números
+CREATE POLICY "Users can update their own numbers"
+  ON phone_numbers FOR UPDATE
+  USING (auth.uid() = user_id);
 
-CREATE POLICY "Anyone can insert phone numbers"
-  ON phone_numbers
-  FOR INSERT
-  WITH CHECK (true);
+-- Solo el dueño puede borrar sus números (Protección contra borrado masivo ajeno)
+CREATE POLICY "Users can delete their own numbers"
+  ON phone_numbers FOR DELETE
+  USING (auth.uid() = user_id);
 
-CREATE POLICY "Anyone can update phone numbers"
-  ON phone_numbers
-  FOR UPDATE
-  USING (true)
-  WITH CHECK (true);
+-- 4. FUNCIÓN DE SEGURIDAD AVANZADA: Limitar a 10 números por usuario
+-- Esto evita que alguien inyecte 1000 números y sature tu base de datos
+CREATE OR REPLACE FUNCTION check_number_limit()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF (SELECT COUNT(*) FROM phone_numbers WHERE user_id = auth.uid()) >= 10 THEN
+    RAISE EXCEPTION 'Has alcanzado el límite máximo de 10 números permitidos.';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
-CREATE POLICY "Anyone can delete phone numbers"
-  ON phone_numbers
-  FOR DELETE
-  USING (true);
+CREATE TRIGGER enforce_number_limit
+BEFORE INSERT ON phone_numbers
+FOR EACH ROW EXECUTE FUNCTION check_number_limit();
