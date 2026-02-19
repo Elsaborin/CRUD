@@ -2,25 +2,43 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import './PhoneCRUD.css'
 
+interface PhoneRecord {
+  id: string
+  phone: string
+  created_at: string
+}
+
 export default function PhoneCRUD() {
-  const [phones, setPhones] = useState<any[]>([])
+  const [phones, setPhones] = useState<PhoneRecord[]>([])
   const [inputValue, setInputValue] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
+  // CAPA DE SEGURIDAD: Inicialización de identidad antes de cargar datos
   useEffect(() => {
-    // Función para asegurar identidad antes de pedir datos
-    const setupAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
+    const initApp = async () => {
+      // 1. Verificamos si ya hay una sesión (anónima o real)
+      const { data: { session } } = await supabase.auth.getSession();
+      
       if (!session) {
-        await supabase.auth.signInAnonymously() // Crea la identidad segura
+        // 2. Si no hay sesión, creamos una anónima para que el RLS funcione
+        const { error: authError } = await supabase.auth.signInAnonymously();
+        if (authError) {
+          setError('Error de conexión segura');
+          return;
+        }
       }
-      fetchPhones()
-    }
-    setupAuth()
+      // 3. Con la identidad asegurada, cargamos los teléfonos
+      fetchPhones();
+    };
+
+    initApp();
   }, [])
 
   const fetchPhones = async () => {
+    // Gracias al RLS, el '*' solo devuelve los números que pertenecen a TU usuario
     const { data, error } = await supabase
       .from('phone_numbers')
       .select('*')
@@ -31,17 +49,26 @@ export default function PhoneCRUD() {
 
   const handleAdd = async () => {
     if (inputValue.length !== 10) {
-      setError('Deben ser 10 dígitos exactos')
+      setError('El número debe tener 10 dígitos')
       return
     }
 
     setLoading(true)
+    setError('')
+
+    // Insertamos el número; el user_id se asigna automáticamente en la DB
     const { error: insertError } = await supabase
       .from('phone_numbers')
-      .insert([{ phone: inputValue }]) // El user_id se asigna solo en la BD
+      .insert([{ phone: inputValue }])
 
     if (insertError) {
-      setError(insertError.message.includes('duplicate') ? 'Ya registrado' : 'Error de seguridad')
+      if (insertError.message.includes('límite máximo')) {
+        setError('Seguridad: No puedes agregar más de 10 números.')
+      } else if (insertError.message.includes('duplicate')) {
+        setError('Este número ya existe.')
+      } else {
+        setError('Error de seguridad al guardar.')
+      }
     } else {
       setInputValue('')
       fetchPhones()
@@ -50,34 +77,115 @@ export default function PhoneCRUD() {
   }
 
   const handleDelete = async (id: string) => {
-    await supabase.from('phone_numbers').delete().eq('id', id)
-    fetchPhones()
+    // La DB rechazará el borrado si el ID no te pertenece
+    const { error } = await supabase
+      .from('phone_numbers')
+      .delete()
+      .eq('id', id)
+
+    if (error) {
+      setError('No tienes permiso para eliminar este registro.')
+    } else {
+      fetchPhones()
+    }
   }
+
+  const handleUpdate = async (id: string) => {
+    if (editValue.length !== 10) return
+
+    setLoading(true)
+    const { error } = await supabase
+      .from('phone_numbers')
+      .update({ phone: editValue })
+      .eq('id', id)
+
+    if (!error) {
+      setEditingId(null)
+      fetchPhones()
+    } else {
+      setError('Error al actualizar: Acceso denegado.')
+    }
+    setLoading(false)
+  }
+
+  // Validadores para mantener el diseño de entrada limpio
+  const handleInputChange = (val: string) => setInputValue(val.replace(/\D/g, '').slice(0, 10))
+  const handleEditChange = (val: string) => setEditValue(val.replace(/\D/g, '').slice(0, 10))
 
   return (
     <div className="phone-crud">
-      <h1>Registro Seguro</h1>
-      <div className="input-section">
-        <input 
-          type="text" 
-          value={inputValue} 
-          onChange={(e) => setInputValue(e.target.value.replace(/\D/g, '').slice(0, 10))}
-          placeholder="10 dígitos..." 
-        />
-        <button onClick={handleAdd} disabled={loading}>Guardar</button>
+      <div className="header">
+        <h1>Bóveda de Teléfonos</h1>
+        <p className="restriction">Protegido con RLS e Identidad Única</p>
       </div>
-      {error && <p className="error-message">{error}</p>}
-      <table>
-        <thead><tr><th>Número</th><th>Acción</th></tr></thead>
-        <tbody>
-          {phones.map(p => (
-            <tr key={p.id}>
-              <td>{p.phone}</td>
-              <td><button onClick={() => handleDelete(p.id)}>Eliminar</button></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+
+      <div className="input-section">
+        <input
+          type="text"
+          value={inputValue}
+          onChange={(e) => handleInputChange(e.target.value)}
+          placeholder="Ej: 1234567890"
+          className="phone-input"
+          disabled={loading}
+        />
+        <button 
+          onClick={handleAdd} 
+          disabled={loading || inputValue.length !== 10} 
+          className="add-button"
+        >
+          {loading ? 'Validando...' : 'Guardar Seguro'}
+        </button>
+      </div>
+
+      {error && <div className="error-message" style={{ color: '#ff4d4d', fontWeight: 'bold', margin: '10px 0' }}>{error}</div>}
+
+      <div className="table-container">
+        <table className="phone-table">
+          <thead>
+            <tr><th>#</th><th>TELÉFONO</th><th>ACCIONES</th></tr>
+          </thead>
+          <tbody>
+            {phones.map((phone, index) => (
+              <tr key={phone.id}>
+                <td>{index + 1}</td>
+                <td>
+                  {editingId === phone.id ? 
+                    <input 
+                      value={editValue} 
+                      onChange={(e) => handleEditChange(e.target.value)} 
+                      className="edit-input" 
+                      autoFocus
+                    /> : 
+                    phone.phone
+                  }
+                </td>
+                <td>
+                  <div className="actions">
+                    {editingId === phone.id ? (
+                      <button onClick={() => handleUpdate(phone.id)} className="action-btn save-btn">OK</button>
+                    ) : (
+                      <>
+                        <button 
+                          onClick={() => {setEditingId(phone.id); setEditValue(phone.phone)}} 
+                          className="action-btn edit-btn"
+                        >
+                          Editar
+                        </button>
+                        <button 
+                          onClick={() => handleDelete(phone.id)} 
+                          className="action-btn delete-btn"
+                        >
+                          Borrar
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
