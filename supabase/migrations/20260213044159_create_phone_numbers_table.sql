@@ -44,5 +44,3 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER enforce_number_limit
 BEFORE INSERT ON phone_numbers
 FOR EACH ROW EXECUTE FUNCTION check_number_limit();
-// @ts-ignore
-window.supabase = supabase;
